@@ -1,7 +1,9 @@
 import express from 'express';
 import fetch from 'node-fetch';
 import * as cheerio from 'cheerio';
-import { createProxyServer } from 'http-proxy';
+import httpProxy from 'http-proxy';
+const { createProxyServer } = httpProxy;
+
 import { pipeline } from 'stream';
 import { createServer } from 'http';
 import { URL } from 'url';
