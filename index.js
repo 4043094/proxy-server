@@ -1,6 +1,6 @@
 import express from 'express';
 import fetch from 'node-fetch';
-import cheerio from 'cheerio';
+import * as cheerio from 'cheerio';
 import { createProxyServer } from 'http-proxy';
 import { pipeline } from 'stream';
 import { createServer } from 'http';
