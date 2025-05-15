@@ -4,94 +4,102 @@ import * as cheerio from 'cheerio';
 import httpProxy from 'http-proxy';
 const { createProxyServer } = httpProxy;
 
-import { pipeline } from 'stream';
-import { createServer } from 'http';
-import { URL } from 'url';
-
 const app = express();
-const proxy = createProxyServer({ changeOrigin: true });
+const proxy = createProxyServer({});
+const PORT = process.env.PORT || 8080;
 
-function rewriteHTML(html, baseUrl, proxyBase) {
-  const $ = cheerio.load(html);
-
-  $('a[href], link[href], script[src], img[src], iframe[src]').each((_, el) => {
-    const attr = el.name === 'a' || el.name === 'link' ? 'href' : 'src';
-    const original = $(el).attr(attr);
-    if (!original || original.startsWith('data:') || original.startsWith('mailto:')) return;
-
-    try {
-      const absolute = new URL(original, baseUrl).href;
-      $(el).attr(attr, `${proxyBase}?url=${encodeURIComponent(absolute)}`);
-    } catch {}
-  });
-
-  return $.html();
-}
-
-app.get('/', (req, res) => {
-  res.send(`
-    <form method="GET" action="/proxy">
-      <input name="url" placeholder="https://example.com" size="50" required>
-      <button type="submit">Visit</button>
-    </form>
-    <p>Example: Try https://example.com or https://www.gnu.org/licenses/gpl-3.0.txt</p>
-  `);
-});
-
+// Proxy fallback for Google Search
 app.get('/proxy', async (req, res) => {
   const target = req.query.url;
-  if (!target || !/^https?:\/\//.test(target)) {
-    return res.status(400).send('Invalid or missing URL.');
+
+  if (!target) {
+    return res.status(400).send('Missing "url" parameter');
+  }
+
+  // Fallback redirect to DuckDuckGo
+  if (target.startsWith('https://www.google.com/search')) {
+    const parsed = new URL(target);
+    const query = parsed.searchParams.get('q') || '';
+    const fallbackURL = `https://duckduckgo.com/?q=${encodeURIComponent(query)}`;
+    return res.redirect(`/proxy?url=${encodeURIComponent(fallbackURL)}`);
   }
 
   try {
     const response = await fetch(target);
-    const contentType = response.headers.get('content-type');
+    const contentType = response.headers.get('content-type') || '';
 
-    res.set('X-Proxied-By', 'Rewriting Proxy');
-
-    if (contentType && contentType.includes('text/html')) {
+    if (contentType.includes('text/html')) {
       const body = await response.text();
-      const rewritten = rewriteHTML(body, target, '/proxy');
+      const $ = cheerio.load(body);
+
+      $('a[href]').each((_, el) => {
+        const href = $(el).attr('href');
+        if (href && !href.startsWith('#') && !href.startsWith('javascript:')) {
+          const absoluteUrl = new URL(href, target).href;
+          $(el).attr('href', `/proxy?url=${encodeURIComponent(absoluteUrl)}`);
+        }
+      });
+
+      $('form[action]').each((_, el) => {
+        const action = $(el).attr('action');
+        if (action) {
+          const absoluteAction = new URL(action, target).href;
+          $(el).attr('action', `/proxy?url=${encodeURIComponent(absoluteAction)}`);
+        }
+      });
+
       res.set('Content-Type', 'text/html');
-      return res.send(rewritten);
+      return res.send($.html());
+    } else {
+      // Stream non-HTML content directly
+      res.set('Content-Type', contentType);
+      response.body.pipe(res);
     }
-
-    // Non-HTML (e.g., images, CSS)
-    res.set('Content-Type', contentType || 'application/octet-stream');
-    pipeline(response.body, res, (err) => {
-      if (err) res.status(500).end('Stream error');
-    });
-
   } catch (err) {
-    res.status(500).send(`Fetch failed: ${err.message}`);
+    res.status(500).send('Error fetching the target URL: ' + err.message);
   }
 });
 
-// Programmatic download
+// Download support
 app.get('/download', async (req, res) => {
-  const url = req.query.url;
-  if (!url || !/^https?:\/\//.test(url)) {
-    return res.status(400).send('Invalid URL.');
+  const target = req.query.url;
+
+  if (!target) {
+    return res.status(400).send('Missing "url" parameter');
   }
 
   try {
-    const response = await fetch(url);
-    const contentDisposition = response.headers.get('content-disposition');
-    const contentType = response.headers.get('content-type') || 'application/octet-stream';
+    const response = await fetch(target);
+    if (!response.ok) {
+      return res.status(500).send('Failed to download file');
+    }
 
-    res.setHeader('Content-Type', contentType);
-    res.setHeader('Content-Disposition', contentDisposition || 'attachment; filename=file');
+    const fileName = target.split('/').pop() || 'downloaded.file';
+    res.setHeader('Content-Disposition', `attachment; filename="${fileName}"`);
+    res.setHeader('Content-Type', response.headers.get('content-type') || 'application/octet-stream');
 
-    pipeline(response.body, res, (err) => {
-      if (err) res.status(500).send('Download failed.');
-    });
+    response.body.pipe(res);
   } catch (err) {
-    res.status(500).send(`Error: ${err.message}`);
+    res.status(500).send('Download error: ' + err.message);
   }
 });
 
-const PORT = process.env.PORT || 8080;
-createServer(app).listen(PORT, () => {
-  console.log(`Proxy server running on http://localhost:${PORT}`);
+// Simple form UI at root
+app.get('/', (req, res) => {
+  res.send(`
+    <form action="/proxy" method="get">
+      <input type="text" name="url" placeholder="Enter a URL" style="width: 300px;">
+      <button type="submit">Go</button>
+    </form>
+    <p>Or download a file:</p>
+    <form action="/download" method="get">
+      <input type="text" name="url" placeholder="File URL" style="width: 300px;">
+      <button type="submit">Download</button>
+    </form>
+  `);
+});
+
+// Start server
+app.listen(PORT, () => {
+  console.log(`Proxy server running at http://localhost:${PORT}`);
 });
