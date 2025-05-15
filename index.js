@@ -8,7 +8,10 @@ const app = express();
 const proxy = createProxyServer({});
 const PORT = process.env.PORT || 8080;
 
-// Proxy fallback for Google Search
+app.use(express.urlencoded({ extended: true }));
+app.use(express.json());
+
+// Redirect Google searches to DuckDuckGo
 app.get('/proxy', async (req, res) => {
   const target = req.query.url;
 
@@ -16,17 +19,14 @@ app.get('/proxy', async (req, res) => {
     return res.status(400).send('Missing "url" parameter');
   }
 
-  // Fallback redirect to DuckDuckGo
+  // Fallback to DuckDuckGo if targeting Google Search
   if (target.startsWith('https://www.google.com/search')) {
     const parsed = new URL(target);
     const query = parsed.searchParams.get('q') || '';
-  
     const fallbackURL = `https://duckduckgo.com/?q=${query}`;
     const finalURL = `/proxy?url=${encodeURIComponent(fallbackURL)}`;
-    console.log("Redirecting Google Search to:", finalURL);
-  
     return res.redirect(finalURL);
-  }  
+  }
 
   try {
     const response = await fetch(target);
@@ -36,6 +36,7 @@ app.get('/proxy', async (req, res) => {
       const body = await response.text();
       const $ = cheerio.load(body);
 
+      // Rewrite links
       $('a[href]').each((_, el) => {
         const href = $(el).attr('href');
         if (href && !href.startsWith('#') && !href.startsWith('javascript:')) {
@@ -44,18 +45,21 @@ app.get('/proxy', async (req, res) => {
         }
       });
 
+      // Rewrite forms to proxy/form route
       $('form[action]').each((_, el) => {
         const action = $(el).attr('action');
         if (action) {
           const absoluteAction = new URL(action, target).href;
-          $(el).attr('action', `/proxy?url=${encodeURIComponent(absoluteAction)}`);
+          const urlOnly = absoluteAction.split('?')[0]; // remove query params
+          $(el).attr('action', `/proxy/form?url=${encodeURIComponent(urlOnly)}`);
+          $(el).attr('method', 'GET');
         }
       });
 
       res.set('Content-Type', 'text/html');
       return res.send($.html());
     } else {
-      // Stream non-HTML content directly
+      // For non-HTML (e.g., files), stream directly
       res.set('Content-Type', contentType);
       response.body.pipe(res);
     }
@@ -64,7 +68,23 @@ app.get('/proxy', async (req, res) => {
   }
 });
 
-// Download support
+// Support rewritten form submissions via /proxy/form
+app.all('/proxy/form', async (req, res) => {
+  const baseUrl = req.query.url;
+  if (!baseUrl) return res.status(400).send('Missing "url" parameter');
+
+  const fullUrl = new URL(baseUrl);
+  const params = new URLSearchParams(req.query);
+
+  // Remove 'url' so it's not passed to the target
+  params.delete('url');
+
+  fullUrl.search = params.toString();
+
+  return res.redirect(`/proxy?url=${encodeURIComponent(fullUrl.toString())}`);
+});
+
+// File download support
 app.get('/download', async (req, res) => {
   const target = req.query.url;
 
@@ -88,7 +108,7 @@ app.get('/download', async (req, res) => {
   }
 });
 
-// Simple form UI at root
+// Homepage UI
 app.get('/', (req, res) => {
   res.send(`
     <form action="/proxy" method="get">
