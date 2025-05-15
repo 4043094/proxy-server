@@ -20,9 +20,13 @@ app.get('/proxy', async (req, res) => {
   if (target.startsWith('https://www.google.com/search')) {
     const parsed = new URL(target);
     const query = parsed.searchParams.get('q') || '';
-    const fallbackURL = `https://duckduckgo.com/?q=${encodeURIComponent(query)}`;
-    return res.redirect(`/proxy?url=${encodeURIComponent(fallbackURL)}`);
-  }
+  
+    const fallbackURL = `https://duckduckgo.com/?q=${query}`;
+    const finalURL = `/proxy?url=${encodeURIComponent(fallbackURL)}`;
+    console.log("Redirecting Google Search to:", finalURL);
+  
+    return res.redirect(finalURL);
+  }  
 
   try {
     const response = await fetch(target);
